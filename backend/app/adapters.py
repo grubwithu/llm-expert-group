@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import json
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,6 +20,14 @@ class ModelAdapter(ABC):
     async def generate(self, *, system: str, prompt: str) -> str:
         raise NotImplementedError
 
+    async def stream(self, *, system: str, prompt: str) -> AsyncIterator[str]:
+        """Yield output text fragments.
+
+        Adapters without a native streaming implementation retain a safe
+        compatibility path, which also keeps test adapters deliberately small.
+        """
+        yield await self.generate(system=system, prompt=prompt)
+
     def _client(self) -> httpx.AsyncClient:
         return self.client or httpx.AsyncClient(timeout=self.config.timeout_seconds)
 
@@ -28,6 +38,28 @@ class ModelAdapter(ABC):
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             return response.json()
+        finally:
+            if owns_client:
+                await client.aclose()
+
+    async def _stream_post(self, endpoint: str, headers: dict[str, str], payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
+        owns_client = self.client is None
+        client = self._client()
+        try:
+            async with client.stream("POST", endpoint, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        decoded = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(decoded, dict):
+                        yield decoded
         finally:
             if owns_client:
                 await client.aclose()
@@ -105,6 +137,42 @@ class OpenAIResponsesAdapter(ModelAdapter):
         data = await self._post(_endpoint(self.config.api_url, "/responses"), headers, payload)
         return parse_openai_responses_text(data)
 
+    async def stream(self, *, system: str, prompt: str) -> AsyncIterator[str]:
+        payload: dict[str, Any] = {"model": self.config.model, "instructions": system, "input": prompt, "stream": True}
+        payload.update(_openai_reasoning_payload(self.config.reasoning))
+        payload.update(self.config.params)
+        headers = {"Authorization": f"Bearer {self.config.resolved_api_key()}", "Content-Type": "application/json", **self.config.headers}
+        emitted_text = False
+        async for event in self._stream_post(_endpoint(self.config.api_url, "/responses"), headers, payload):
+            delta = event.get("delta")
+            if event.get("type") == "response.output_text.delta" and isinstance(delta, str):
+                emitted_text = True
+                yield delta
+                continue
+
+            # The Responses API completes with this event.  Several compatible
+            # gateways omit all delta events but include the completed response
+            # (and its full output) here, which otherwise looks like an empty
+            # model reply to the actor protocol.
+            if event.get("type") == "response.completed" and not emitted_text:
+                response = event.get("response")
+                if isinstance(response, dict):
+                    try:
+                        text = parse_openai_responses_text(response)
+                    except RuntimeError:
+                        text = ""
+                    if text:
+                        emitted_text = True
+                        yield text
+
+        # A gateway that accepts `stream: true` but returns no SSE text must
+        # not silently turn a council phase into an empty answer.  Retry just
+        # this request in ordinary Responses mode, which is widely supported.
+        if not emitted_text:
+            text = await self.generate(system=system, prompt=prompt)
+            if text:
+                yield text
+
 
 class AnthropicMessagesAdapter(ModelAdapter):
     async def generate(self, *, system: str, prompt: str) -> str:
@@ -133,6 +201,28 @@ class AnthropicMessagesAdapter(ModelAdapter):
         data = await self._post(_endpoint(self.config.api_url, "/messages"), headers, payload)
         return parse_anthropic_messages_text(data)
 
+    async def stream(self, *, system: str, prompt: str) -> AsyncIterator[str]:
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        payload.update(_anthropic_reasoning_payload(self.config.reasoning))
+        payload.update(self.config.params)
+        headers = {"x-api-key": self.config.resolved_api_key(), "anthropic-version": "2023-06-01", "Content-Type": "application/json", **self.config.headers}
+        emitted_text = False
+        async for event in self._stream_post(_endpoint(self.config.api_url, "/messages"), headers, payload):
+            delta = event.get("delta")
+            if event.get("type") == "content_block_delta" and isinstance(delta, dict) and isinstance(delta.get("text"), str):
+                emitted_text = True
+                yield delta["text"]
+        if not emitted_text:
+            text = await self.generate(system=system, prompt=prompt)
+            if text:
+                yield text
+
 
 class OpenAIChatCompletionsAdapter(ModelAdapter):
     async def generate(self, *, system: str, prompt: str) -> str:
@@ -160,6 +250,28 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
         if isinstance(content, list):
             return "\n".join(str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("text"))
         raise RuntimeError("unable to extract text from OpenAI-compatible chat response")
+
+    async def stream(self, *, system: str, prompt: str) -> AsyncIterator[str]:
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        payload.update(_openai_chat_reasoning_payload(self.config.reasoning))
+        payload.update(self.config.params)
+        headers = {"Authorization": f"Bearer {self.config.resolved_api_key()}", "Content-Type": "application/json", **self.config.headers}
+        emitted_text = False
+        async for event in self._stream_post(_endpoint(self.config.api_url, "/chat/completions"), headers, payload):
+            choices = event.get("choices") or []
+            if choices and isinstance(choices[0], dict):
+                content = choices[0].get("delta", {}).get("content")
+                if isinstance(content, str):
+                    emitted_text = True
+                    yield content
+        if not emitted_text:
+            text = await self.generate(system=system, prompt=prompt)
+            if text:
+                yield text
 
 
 def parse_openai_responses_text(data: dict[str, Any]) -> str:

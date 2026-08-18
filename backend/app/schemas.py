@@ -80,3 +80,18 @@ class SessionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     rounds: list[RoundOut] = Field(default_factory=list)
+
+
+class RoundRunOut(BaseModel):
+    id: str
+    session_id: str
+    number: int
+    kind: str
+    status: str
+    opening_statement: str
+    expert_responses: list[ExpertResponse] = Field(default_factory=list)
+    chairman_summary: str
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None

@@ -8,6 +8,87 @@ from app.config import ModelConfig, ReasoningConfig
 
 
 @pytest.mark.asyncio
+async def test_openai_responses_streams_output_text_deltas():
+    seen = {}
+
+    async def handler(request: httpx.Request):
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"type":"response.output_text.delta","delta":"hel"}\n\n'
+                b'data: {"type":"response.output_text.delta","delta":"lo"}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cfg = ModelConfig(id="x", display_name="X", protocol="openai_responses", model="model-x", api_url="https://gateway.example/v1", api_key="secret")
+    adapter = OpenAIResponsesAdapter(cfg, client=client)
+    chunks = [chunk async for chunk in adapter.stream(system="sys", prompt="hello")]
+    await client.aclose()
+
+    assert chunks == ["hel", "lo"]
+    assert seen["json"]["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_uses_completed_event_when_gateway_omits_deltas():
+    async def handler(request: httpx.Request):
+        return httpx.Response(
+            200,
+            content=b'data: {"type":"response.completed","response":{"output_text":"complete text"}}\n\n',
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cfg = ModelConfig(id="x", display_name="X", protocol="openai_responses", model="model-x", api_url="https://gateway.example/v1", api_key="secret")
+    chunks = [chunk async for chunk in OpenAIResponsesAdapter(cfg, client=client).stream(system="sys", prompt="hello")]
+    await client.aclose()
+
+    assert chunks == ["complete text"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_falls_back_to_non_streaming_when_gateway_has_no_deltas():
+    calls: list[dict] = []
+
+    async def handler(request: httpx.Request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if payload.get("stream"):
+            return httpx.Response(200, content=b"data: [DONE]\n\n")
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "fallback text"}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cfg = ModelConfig(id="x", display_name="X", protocol="anthropic_messages", model="claude-x", api_url="https://gateway.example/v1", api_key="secret")
+    chunks = [chunk async for chunk in AnthropicMessagesAdapter(cfg, client=client).stream(system="sys", prompt="hello")]
+    await client.aclose()
+
+    assert chunks == ["fallback text"]
+    assert [payload.get("stream") for payload in calls] == [True, None]
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_stream_falls_back_to_non_streaming_when_gateway_has_no_deltas():
+    calls: list[dict] = []
+
+    async def handler(request: httpx.Request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if payload.get("stream"):
+            return httpx.Response(200, content=b"data: [DONE]\n\n")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "fallback text"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cfg = ModelConfig(id="x", display_name="X", protocol="openai_chat_completions", model="model-x", api_url="https://gateway.example/v1", api_key="secret")
+    chunks = [chunk async for chunk in OpenAIChatCompletionsAdapter(cfg, client=client).stream(system="sys", prompt="hello")]
+    await client.aclose()
+
+    assert chunks == ["fallback text"]
+    assert [payload.get("stream") for payload in calls] == [True, None]
+
+
+@pytest.mark.asyncio
 async def test_openai_responses_wire_format():
     seen = {}
 

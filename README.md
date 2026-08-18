@@ -60,19 +60,18 @@ Secretary file/line citations are re-read and validated by the backend. A `VERIF
 
 ### Human
 
-The human owns the round boundary. The council cannot automatically debate until consensus. After every Chairman synthesis, LangGraph pauses with a real interrupt and waits for one of four actions: `continue`, `redirect`, `investigate`, or `stop`.
+The human owns the round boundary. The council cannot automatically debate until consensus. After the Chairman synthesis is streamed and persisted, the UI waits for one of four actions: `continue`, `redirect`, `investigate`, or `stop`.
 
-## LangGraph architecture
+## Streaming round runtime
 
-LangGraph is used only as the **orchestration runtime**. Model transport remains project-owned.
+Starting a round is intentionally a short request. The backend persists a `CouncilRoundRun`, executes it in the background, and exposes its durable event log over SSE.
 
-- Top-level `StateGraph`: Chairman opening -> dynamic expert fan-out (`Send`) -> Chairman synthesis -> Human Gate (`interrupt`).
-- Chairman/Expert actor subgraph: model -> optional `ask_secretary` -> model -> ... -> final response.
-- Secretary subgraph: model -> repository tool -> model -> ... -> factual answer.
-- `AsyncSqliteSaver`: durable execution checkpoints and Human Gate resume state.
-- SQLAlchemy SQLite database: canonical application records, provenance, expert outputs, human actions, and Secretary evidence.
+1. Chairman opening is streamed to the UI.
+2. Once complete, Experts begin in parallel and stream into independent UI cards.
+3. After all Experts reach a terminal state, the Chairman synthesis streams.
+4. The persisted Human Gate returns the session to `ready` or `stopped`.
 
-Every successful council round records its LangGraph `thread_id`, giving future replay/fork support a stable execution anchor.
+SSE events are stored in SQLite, so reconnecting clients replay missed text from the event sequence instead of losing partial output.
 
 ## Design principles
 
@@ -82,7 +81,7 @@ Every successful council round records its LangGraph `thread_id`, giving future 
 - **Evidence over voting.** A minority position may dominate if its argument and evidence are stronger.
 - **Facts and judgment are separate roles.** Secretary answers "what is true in the repository?"; Chairman/Experts answer "what should we conclude?"
 - **Human controls the rounds.** There is no automatic "debate until consensus" loop.
-- **Durable execution.** LangGraph checkpoints the execution path; the application database persists the auditable council record.
+- **Durable execution.** The application database persists run state, streamed events, final records, and provenance.
 - **Provider-neutral model layer.** Every model independently configures endpoint, API key, model name, headers, parameters, and wire protocol.
 
 ## Supported model protocols
@@ -130,11 +129,16 @@ The compatibility layer translates the normalized setting for each protocol:
 
 ```bash
 cp config.example.yaml config.yaml
-export CHAIRMAN_API_KEY=...
-export SECRETARY_API_KEY=...
-export GPT_EXPERT_API_KEY=...
-export CLAUDE_EXPERT_API_KEY=...
-export THIRD_PARTY_API_KEY=...
+```
+
+Create a `.env` file next to `config.yaml` and put the API keys there. The backend loads it automatically at startup, while preserving any values explicitly set in the process environment:
+
+```bash
+CHAIRMAN_API_KEY=...
+SECRETARY_API_KEY=...
+GPT_EXPERT_API_KEY=...
+CLAUDE_EXPERT_API_KEY=...
+THIRD_PARTY_API_KEY=...
 ```
 
 The core role configuration is:
@@ -148,8 +152,11 @@ experts:
 
 actor_max_secretary_queries: 4
 secretary_max_tool_steps: 8
-langgraph_checkpoint_path: ./data/langgraph-checkpoints.sqlite
-langgraph_max_concurrency: 8
+# The Chairman receives a larger evidence budget before producing an opening.
+chairman_opening_max_secretary_queries: 12
+chairman_opening_secretary_max_tool_steps: 24
+chairman_synthesis_max_secretary_queries: 8
+chairman_synthesis_secretary_max_tool_steps: 16
 ```
 
 Role IDs reference entries in `models`. The same underlying model may be configured for more than one role, although using a cheaper factual model for Secretary is often reasonable.
@@ -157,12 +164,8 @@ Role IDs reference entries in `models`. The same underlying model may be configu
 ### 2. Run backend
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-cd ..
-LLM_EXPERT_GROUP_CONFIG=./config.yaml uvicorn backend.app.main:app --reload --port 8000
+make backend-install  # only needed once, or after dependency changes
+make backend-dev
 ```
 
 The backend exposes OpenAPI docs at `http://127.0.0.1:8000/docs`.
@@ -204,12 +207,12 @@ The React UI exposes these interactions underneath the Chairman and each Expert 
 
 ## Human actions
 
-After each Chairman synthesis, LangGraph is paused at `interrupt()`.
+After each Chairman synthesis, the persisted round enters `awaiting_human`.
 
-- **Continue** — resume the interrupt, close the current round, and allow the next round to narrow unresolved disagreements.
+- **Continue** — close the current round and allow the next round to narrow unresolved disagreements.
 - **Redirect** — requires a note; the next opening follows the new human focus.
 - **Investigate** — requires a note; the next round focuses on disputed factual claims and evidence acquisition.
-- **Stop** — resume the interrupt and permanently close the session.
+- **Stop** — permanently close the session.
 
 Resuming a Human Gate does **not** automatically start another model round. The UI returns to `ready`, keeping the human in control of when the next round actually runs.
 
@@ -218,17 +221,14 @@ Resuming a Human Gate does **not** automatically start another model round. The 
 - `GET /api/models` — redacted role/model configuration.
 - `GET /api/sessions` — session history.
 - `POST /api/sessions` — capture repository metadata and create a council.
-- `POST /api/sessions/{id}/rounds/run` — run one LangGraph council round until the Human Gate interrupt.
-- `POST /api/sessions/{id}/action` — resume the Human Gate with `continue`, `redirect`, `investigate`, or `stop`.
+- `POST /api/sessions/{id}/rounds` — create a background round run and return `202 Accepted`.
+- `GET /api/round-runs/{id}/events` — durable SSE stream for Chairman, Expert, synthesis, and failure events.
+- `GET /api/round-runs/{id}` — current run state.
+- `POST /api/sessions/{id}/action` — record `continue`, `redirect`, `investigate`, or `stop` after the Human Gate.
 
 ## Persistence
 
-Two SQLite stores intentionally have different responsibilities:
-
-1. **Application database (`database_url`)** — sessions, rounds, final expert responses, Chairman output, human actions, and normalized Secretary provenance.
-2. **LangGraph checkpoint database (`langgraph_checkpoint_path`)** — execution checkpoints required for interrupt/resume and future time travel.
-
-The checkpoint database should be treated as executable application state. The backend enables strict LangGraph msgpack deserialization by default.
+The application database (`database_url`) stores sessions, in-flight runs, event sequences, final rounds, expert responses, Chairman output, human actions, and normalized Secretary provenance.
 
 ## Security notes
 
@@ -258,9 +258,9 @@ npm run build
 
 ## Roadmap
 
-1. Streaming LangGraph node/Secretary tool progress with SSE or WebSocket.
-2. Graph checkpoint timeline in the UI.
-3. Replay/fork from a recorded round/thread with alternate models or human edits.
+1. Stream Secretary tool progress alongside actor text.
+2. Resume an interrupted model call safely after process restart (current behavior marks it failed and retryable rather than replaying a potentially billable request).
+3. Replay/fork from a recorded round with alternate models or human edits.
 4. Tool-using Investigator role for tests, shell commands, web research, GitHub, or MCP under an explicit permission boundary.
 5. Repository refresh/diff policies between rounds.
 6. Exportable decision report and machine-readable session bundle.

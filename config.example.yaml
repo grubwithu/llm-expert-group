@@ -3,6 +3,12 @@ chairman: chairman
 secretary: secretary
 actor_max_secretary_queries: 4
 secretary_max_tool_steps: 8
+# Chairman first establishes a repository-grounded agenda, so it receives a
+# larger evidence budget than individual experts.
+chairman_opening_max_secretary_queries: 12
+chairman_opening_secretary_max_tool_steps: 24
+chairman_synthesis_max_secretary_queries: 8
+chairman_synthesis_secretary_max_tool_steps: 16
 experts:
   - gpt-expert
   - claude-expert

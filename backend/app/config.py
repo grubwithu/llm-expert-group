@@ -11,6 +11,30 @@ Protocol = Literal["openai_responses", "anthropic_messages", "openai_chat_comple
 ReasoningMode = Literal["auto", "adaptive", "budget", "disabled"]
 
 
+def load_dotenv(path: str | Path) -> None:
+    """Load simple .env entries without overriding explicit process variables."""
+    dotenv_path = Path(path)
+    if not dotenv_path.is_file():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not key.isidentifier():
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 class ReasoningConfig(BaseModel):
     """Provider-neutral reasoning controls translated by each wire-protocol adapter.
 
@@ -88,6 +112,10 @@ class AppConfig(BaseModel):
     experts: list[str]
     actor_max_secretary_queries: int = 4
     secretary_max_tool_steps: int = 8
+    chairman_opening_max_secretary_queries: int = 12
+    chairman_opening_secretary_max_tool_steps: int = 24
+    chairman_synthesis_max_secretary_queries: int = 8
+    chairman_synthesis_secretary_max_tool_steps: int = 16
     models: list[ModelConfig]
     database_url: str = "sqlite:///./data/council.db"
     langgraph_checkpoint_path: str = "./data/langgraph-checkpoints.sqlite"
@@ -113,6 +141,10 @@ class AppConfig(BaseModel):
             raise ValueError("actor_max_secretary_queries must be >= 0")
         if self.secretary_max_tool_steps < 1:
             raise ValueError("secretary_max_tool_steps must be >= 1")
+        if self.chairman_opening_max_secretary_queries < 0 or self.chairman_synthesis_max_secretary_queries < 0:
+            raise ValueError("chairman Secretary query limits must be >= 0")
+        if self.chairman_opening_secretary_max_tool_steps < 1 or self.chairman_synthesis_secretary_max_tool_steps < 1:
+            raise ValueError("chairman Secretary tool-step limits must be >= 1")
         if self.langgraph_max_concurrency < 1:
             raise ValueError("langgraph_max_concurrency must be >= 1")
         return self
@@ -128,6 +160,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         raise FileNotFoundError(
             f"configuration file {config_path} not found; copy config.example.yaml to config.yaml or set LLM_EXPERT_GROUP_CONFIG"
         )
+    load_dotenv(config_path.parent / ".env")
     with config_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     return AppConfig.model_validate(data)

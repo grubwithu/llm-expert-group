@@ -44,3 +44,19 @@ async def test_secretary_downgrades_fake_verified_citation(tmp_path: Path):
     assert result.status == "PARTIALLY_VERIFIED"
     assert result.evidence == []
     assert any("downgraded" in x for x in result.limitations)
+
+
+def test_opening_baseline_includes_repository_inventory_and_document_content(tmp_path: Path):
+    (tmp_path / "README.md").write_text("# Project\nGoal: test rollback.\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("print('run')\n", encoding="utf-8")
+    cfg = ModelConfig(id="s", display_name="S", protocol="openai_responses", model="x", api_url="https://x", api_key="x")
+    agent = SecretaryAgent(ScriptedAdapter(cfg, []), RepositoryWorkspace(str(tmp_path), RepositoryConfig()))
+
+    result = agent.opening_baseline(requester_role="chairman", requester_id="chair", sequence=1)
+
+    assert result.status == "PARTIALLY_VERIFIED"
+    assert "README.md" in result.answer
+    assert "Goal: test rollback." in result.answer
+    assert "src/main.py" in result.answer
+    assert result.tool_trace[0].startswith("mandatory opening baseline")

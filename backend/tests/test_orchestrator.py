@@ -9,6 +9,9 @@ from app.orchestrator import CouncilOrchestrator, to_session_out
 from app.schemas import HumanAction, SessionCreate
 
 
+pytestmark = pytest.mark.skip(reason="The synchronous LangGraph round runner was retired in favor of durable streamed round runs.")
+
+
 class FakeAdapter(ModelAdapter):
     async def generate(self, *, system: str, prompt: str) -> str:
         if self.config.id == "secretary":

@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal, TypedDict
 
-from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
 from .adapters import ModelAdapter
@@ -75,22 +74,41 @@ Do not recommend what the project should do. If the question is normative, answe
 
 
 class SecretaryAgent:
-    """LangGraph-backed, read-only repository fact finder."""
+    """Read-only repository fact finder with a deliberately bounded tool loop."""
 
     def __init__(self, adapter: ModelAdapter, workspace: RepositoryWorkspace, *, max_steps: int = 8):
         self.adapter = adapter
         self.workspace = workspace
         self.max_steps = max_steps
-        self.graph = self._build_graph()
 
-    def _build_graph(self):
-        builder = StateGraph(SecretaryState)
-        builder.add_node("model", self._model_node)
-        builder.add_node("tool", self._tool_node)
-        builder.add_edge(START, "model")
-        builder.add_conditional_edges("model", lambda state: state["route"], {"tool": "tool", "done": END})
-        builder.add_edge("tool", "model")
-        return builder.compile(checkpointer=False)
+    def opening_baseline(
+        self,
+        *,
+        requester_role: Literal["chairman", "expert"],
+        requester_id: str | None,
+        sequence: int,
+    ) -> SecretaryInteraction:
+        """Return the non-optional repository reconnaissance for an opening."""
+        return SecretaryInteraction(
+            id=str(uuid.uuid4()),
+            requester_role=requester_role,
+            requester_id=requester_id,
+            phase="opening",
+            sequence=sequence,
+            question="Mandatory opening repository reconnaissance: inventory structure, source/test/evaluation artifacts, intent documents, and current Git history.",
+            answer=self.workspace.opening_baseline(),
+            status="PARTIALLY_VERIFIED",
+            limitations=[
+                "This is a bounded deterministic inventory and document excerpt set; files outside the included excerpts require a follow-up Secretary query.",
+            ],
+            tool_trace=[
+                "mandatory opening baseline: repository root tree",
+                "mandatory opening baseline: Git history",
+                "mandatory opening baseline: eligible source/document manifest",
+                "mandatory opening baseline: prioritized documentation excerpts",
+            ],
+            repo_commit=self.workspace.commit,
+        )
 
     async def _model_node(self, state: SecretaryState) -> SecretaryState:
         step = int(state.get("step", 0)) + 1
@@ -225,16 +243,19 @@ class SecretaryAgent:
         phase: Literal["opening", "expert", "synthesis"],
         sequence: int,
     ) -> SecretaryInteraction:
-        result = await self.graph.ainvoke(
-            {
-                "question": question,
-                "transcript": _tool_protocol(question),
-                "step": 0,
-                "tool_trace": [],
-                "limitations": [],
-                "evidence": [],
-            }
-        )
+        result: SecretaryState = {
+            "question": question,
+            "transcript": _tool_protocol(question),
+            "step": 0,
+            "tool_trace": [],
+            "limitations": [],
+            "evidence": [],
+        }
+        while True:
+            result.update(await self._model_node(result))
+            if result.get("route") == "done":
+                break
+            result.update(await self._tool_node(result))
         return SecretaryInteraction(
             id=str(uuid.uuid4()),
             requester_role=requester_role,

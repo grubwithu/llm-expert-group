@@ -61,3 +61,23 @@ export type CouncilSession = {
   updated_at: string
   rounds: CouncilRound[]
 }
+
+export type RoundRun = {
+  id: string
+  session_id: string
+  number: number
+  kind: string
+  status: string
+  opening_statement: string
+  expert_responses: ExpertResponse[]
+  chairman_summary: string
+  error?: string | null
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}
+
+export type CouncilEvent = {
+  type: string
+  payload: Record<string, unknown>
+}

@@ -57,6 +57,36 @@ class CouncilRound(Base):
     )
 
 
+class CouncilRoundRun(Base):
+    """Durable execution record for an asynchronously streamed council round."""
+
+    __tablename__ = "council_round_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("council_sessions.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(32), default="discussion")
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    opening_statement: Mapped[str] = mapped_column(Text, default="")
+    expert_responses_json: Mapped[str] = mapped_column(Text, default="[]")
+    chairman_summary: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CouncilRoundEvent(Base):
+    __tablename__ = "council_round_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("council_round_runs.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(String(80))
+    payload_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class SecretaryInteractionRow(Base):
     __tablename__ = "secretary_interactions"
 

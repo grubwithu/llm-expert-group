@@ -188,6 +188,45 @@ class RepositoryWorkspace:
         except (subprocess.SubprocessError, FileNotFoundError) as exc:
             return f"(git diff unavailable: {exc})"
 
+    def opening_baseline(self) -> str:
+        """Collect a deterministic, broad repository baseline for a new council.
+
+        This is deliberately not delegated to an LLM: the Chairman must have a
+        real inventory before deciding which repository questions are worth
+        asking.  The Secretary can then use its normal tool loop to inspect
+        any file in greater depth.
+        """
+        candidates = _candidate_files(self.root, self.config)
+        parts = [
+            "Repository root (direct listing):\n" + self.list_tree(max_entries=300),
+            "\nObserved Git history:\n" + self.git_log(max_entries=20),
+        ]
+        manifest = "\n".join(f"- {path.as_posix()}" for path in candidates)
+        if len(manifest) > 40_000:
+            manifest = manifest[:40_000] + "\n... file manifest truncated ..."
+        parts.append("\nRepository file manifest (eligible text/source files):\n" + (manifest or "(none)"))
+
+        # Read the documents most likely to state intent and evaluation scope.
+        # Each excerpt is bounded; the complete manifest above lets the
+        # Chairman/Secretary request any omitted file precisely.
+        documents = [
+            path for path in candidates
+            if path.suffix in {".md", ".rst", ".txt"}
+            and (_PRIORITY_NAMES.get(path.name, 20) <= 3 or (path.parts and path.parts[0] in {"docs", "doc"}))
+        ]
+        for relative in documents[:16]:
+            try:
+                content = self.read(relative.as_posix(), start_line=1, end_line=400)
+            except (OSError, ValueError):
+                continue
+            parts.append(f"\nDocument excerpt: {relative.as_posix()}\n{content}")
+
+        baseline = "\n".join(parts)
+        # Keep the mandatory preflight well inside the same configurable
+        # context envelope used for repository snapshots.
+        limit = self.config.max_context_chars
+        return baseline if len(baseline) <= limit else baseline[:limit] + "\n... baseline truncated ..."
+
 
 def snapshot_repository(path: str, config: RepositoryConfig) -> RepositorySnapshot:
     root = Path(path).expanduser().resolve()
