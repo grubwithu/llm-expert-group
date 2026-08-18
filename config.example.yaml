@@ -1,0 +1,53 @@
+# Copy to config.yaml. Prefer api_key_env so secrets never enter source control.
+chairman: chairman
+experts:
+  - gpt-expert
+  - claude-expert
+  - third-party-expert
+
+database_url: sqlite:///./data/council.db
+cors_origins:
+  - http://localhost:5173
+
+repository:
+  max_files: 180
+  max_file_bytes: 160000
+  max_context_chars: 180000
+
+models:
+  - id: chairman
+    display_name: Chairman
+    protocol: openai_responses
+    model: gpt-5.6
+    api_url: https://api.openai.com/v1
+    api_key_env: CHAIRMAN_API_KEY
+    params:
+      store: false
+
+  - id: gpt-expert
+    display_name: GPT Expert
+    protocol: openai_responses
+    model: gpt-5.6
+    api_url: https://api.openai.com/v1
+    api_key_env: GPT_EXPERT_API_KEY
+    params:
+      store: false
+
+  - id: claude-expert
+    display_name: Claude Expert
+    protocol: anthropic_messages
+    model: claude-opus-4-1-20250805
+    api_url: https://api.anthropic.com/v1
+    api_key_env: CLAUDE_EXPERT_API_KEY
+    params:
+      max_tokens: 8192
+
+  # Any gateway/vendor that accepts OpenAI-compatible Chat Completions can use this optional dialect.
+  - id: third-party-expert
+    display_name: Third-party Expert
+    protocol: openai_chat_completions
+    model: your-model-name
+    api_url: https://your-gateway.example.com/v1
+    api_key_env: THIRD_PARTY_API_KEY
+    params:
+      temperature: 0.3
