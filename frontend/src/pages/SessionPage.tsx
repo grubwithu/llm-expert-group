@@ -5,6 +5,7 @@ import { Badge, Box, Button, Callout, Card, Flex, Heading, Separator, Text, Text
 import { ArrowLeft, CircleStop, FlaskConical, Play, RefreshCw, Route } from 'lucide-react'
 import { api } from '../api'
 import { Markdown } from '../components/Markdown'
+import { SecretaryTrace } from '../components/SecretaryTrace'
 
 export function SessionPage() {
   const { id = '' } = useParams()
@@ -35,11 +36,15 @@ export function SessionPage() {
           <Text color="gray" as="div" mt="2">{session.repo_path}</Text>
           <Flex gap="2" mt="3"><Badge>{session.status}</Badge><Badge color="gray">round {session.current_round}</Badge>{session.repo_commit && <Badge color="gray">{session.repo_commit.slice(0, 10)}</Badge>}</Flex>
         </Box>
-        {session.status === 'ready' && <Button size="3" onClick={() => run.mutate()} loading={run.isPending}><Play size={17}/>{session.current_round ? 'Run next round' : 'Start council'}</Button>}
+        {(session.status === 'ready' || session.status === 'error') && (
+          <Button size="3" onClick={() => run.mutate()} loading={run.isPending}>
+            <Play size={17}/>{session.status === 'error' ? 'Retry round' : session.current_round ? 'Run next round' : 'Start council'}
+          </Button>
+        )}
       </Flex>
 
       <Card mb="6"><Heading size="3" mb="2">Original question</Heading><Text>{session.topic}</Text></Card>
-      {session.repo_context_truncated && <Callout.Root mb="5" color="amber"><Callout.Text>The repository context hit the configured size limit. The chairman saw a prioritized snapshot, not every file.</Callout.Text></Callout.Root>}
+      {session.repo_context_truncated && <Callout.Root mb="5" color="amber"><Callout.Text>The initial repository provenance snapshot hit the configured size limit. Secretary queries still inspect the repository directly through bounded read-only tools.</Callout.Text></Callout.Root>}
       {busyError && <Callout.Root mb="5" color="red"><Callout.Text>{busyError}</Callout.Text></Callout.Root>}
 
       <Flex direction="column" gap="6">
@@ -47,6 +52,7 @@ export function SessionPage() {
           <Card key={round.id}>
             <Flex justify="between" align="center" mb="4"><Heading size="5">Round {round.number}</Heading><Badge color={round.kind === 'investigation' ? 'orange' : 'indigo'}>{round.kind}</Badge></Flex>
             <Heading size="3" mb="2">Chairman opening</Heading><Markdown>{round.opening_statement}</Markdown>
+            <SecretaryTrace items={round.chairman_opening_secretary_queries || []} label="Chairman → Secretary" />
             <Separator size="4" my="5" />
             <Heading size="3" mb="3">Independent expert responses</Heading>
             <Flex direction="column" gap="4">
@@ -54,11 +60,14 @@ export function SessionPage() {
                 <Card key={response.model_id} variant="surface">
                   <Flex justify="between" mb="2"><Text weight="bold">{response.display_name}</Text><Badge color={response.error ? 'red' : 'gray'}>{response.model_id}</Badge></Flex>
                   {response.error ? <Text color="red">Provider error: {response.error}</Text> : <Markdown>{response.content}</Markdown>}
+                  <SecretaryTrace items={response.secretary_queries || []} label={`${response.display_name} → Secretary`} />
+                  {response.protocol_warnings?.length > 0 && <Text size="1" color="orange" as="div" mt="3">Protocol warnings: {response.protocol_warnings.join('; ')}</Text>}
                 </Card>
               ))}
             </Flex>
             <Separator size="4" my="5" />
             <Heading size="3" mb="2">Chairman synthesis</Heading><Markdown>{round.chairman_summary}</Markdown>
+            <SecretaryTrace items={round.chairman_synthesis_secretary_queries || []} label="Chairman → Secretary" />
             {round.human_action && <Callout.Root mt="5"><Callout.Text>Human action: <strong>{round.human_action}</strong>{round.human_note ? ` — ${round.human_note}` : ''}</Callout.Text></Callout.Root>}
           </Card>
         ))}

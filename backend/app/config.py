@@ -59,9 +59,14 @@ class RepositoryConfig(BaseModel):
 
 class AppConfig(BaseModel):
     chairman: str
+    secretary: str
     experts: list[str]
+    actor_max_secretary_queries: int = 4
+    secretary_max_tool_steps: int = 8
     models: list[ModelConfig]
     database_url: str = "sqlite:///./data/council.db"
+    langgraph_checkpoint_path: str = "./data/langgraph-checkpoints.sqlite"
+    langgraph_max_concurrency: int = 8
     repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
@@ -70,6 +75,8 @@ class AppConfig(BaseModel):
         ids = {model.id for model in self.models}
         if self.chairman not in ids:
             raise ValueError(f"chairman {self.chairman!r} is not defined in models")
+        if self.secretary not in ids:
+            raise ValueError(f"secretary {self.secretary!r} is not defined in models")
         missing = [item for item in self.experts if item not in ids]
         if missing:
             raise ValueError(f"unknown expert model ids: {missing}")
@@ -77,6 +84,12 @@ class AppConfig(BaseModel):
             raise ValueError("chairman must not also be listed as an expert")
         if not self.experts:
             raise ValueError("at least one expert is required")
+        if self.actor_max_secretary_queries < 0:
+            raise ValueError("actor_max_secretary_queries must be >= 0")
+        if self.secretary_max_tool_steps < 1:
+            raise ValueError("secretary_max_tool_steps must be >= 1")
+        if self.langgraph_max_concurrency < 1:
+            raise ValueError("langgraph_max_concurrency must be >= 1")
         return self
 
     @property

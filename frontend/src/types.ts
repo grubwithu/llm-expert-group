@@ -1,17 +1,47 @@
+export type SecretaryStatus = 'VERIFIED' | 'PARTIALLY_VERIFIED' | 'NOT_FOUND' | 'CONFLICTING_EVIDENCE' | 'UNSTRUCTURED'
+
+export type SecretaryEvidence = {
+  path: string
+  start_line: number
+  end_line: number
+  reason: string
+  excerpt?: string | null
+}
+
+export type SecretaryInteraction = {
+  id: string
+  requester_role: 'chairman' | 'expert'
+  requester_id?: string | null
+  phase: 'opening' | 'expert' | 'synthesis'
+  sequence: number
+  question: string
+  answer: string
+  status: SecretaryStatus
+  evidence: SecretaryEvidence[]
+  limitations: string[]
+  tool_trace: string[]
+  repo_commit?: string | null
+}
+
 export type ExpertResponse = {
   model_id: string
   display_name: string
   content: string
   error?: string | null
+  secretary_queries: SecretaryInteraction[]
+  protocol_warnings: string[]
 }
 
 export type CouncilRound = {
   id: string
   number: number
   kind: string
+  graph_thread_id?: string | null
   opening_statement: string
   expert_responses: ExpertResponse[]
   chairman_summary: string
+  chairman_opening_secretary_queries: SecretaryInteraction[]
+  chairman_synthesis_secretary_queries: SecretaryInteraction[]
   human_action?: string | null
   human_note?: string | null
   created_at: string

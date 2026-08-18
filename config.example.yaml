@@ -1,11 +1,16 @@
 # Copy to config.yaml. Prefer api_key_env so secrets never enter source control.
 chairman: chairman
+secretary: secretary
+actor_max_secretary_queries: 4
+secretary_max_tool_steps: 8
 experts:
   - gpt-expert
   - claude-expert
   - third-party-expert
 
 database_url: sqlite:///./data/council.db
+langgraph_checkpoint_path: ./data/langgraph-checkpoints.sqlite
+langgraph_max_concurrency: 8
 cors_origins:
   - http://localhost:5173
 
@@ -21,6 +26,16 @@ models:
     model: gpt-5.6
     api_url: https://api.openai.com/v1
     api_key_env: CHAIRMAN_API_KEY
+    params:
+      store: false
+
+
+  - id: secretary
+    display_name: Secretary
+    protocol: openai_responses
+    model: gpt-5.6
+    api_url: https://api.openai.com/v1
+    api_key_env: SECRETARY_API_KEY
     params:
       store: false
 

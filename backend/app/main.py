@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .config import load_config
-from .db import CouncilSession, Database
+from .db import CouncilRound, CouncilSession, Database
 from .orchestrator import CouncilOrchestrator, to_session_out
 from .schemas import HumanAction, SessionCreate, SessionOut
 
@@ -18,7 +18,7 @@ database = Database(config.database_url)
 database.create_all()
 orchestrator = CouncilOrchestrator(config)
 
-app = FastAPI(title="LLM Expert Group", version="0.1.0")
+app = FastAPI(title="LLM Expert Group", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
@@ -41,6 +41,7 @@ def health() -> dict[str, str]:
 def models() -> dict:
     return {
         "chairman": config.chairman,
+        "secretary": config.secretary,
         "experts": config.experts,
         "models": [model.public_dict() for model in config.models],
     }
@@ -49,7 +50,7 @@ def models() -> dict:
 @app.get("/api/sessions", response_model=list[SessionOut])
 def list_sessions(db: Session = Depends(get_db)):
     rows = db.execute(
-        select(CouncilSession).options(selectinload(CouncilSession.rounds)).order_by(CouncilSession.updated_at.desc())
+        select(CouncilSession).options(selectinload(CouncilSession.rounds).selectinload(CouncilRound.secretary_interactions)).order_by(CouncilSession.updated_at.desc())
     ).scalars().all()
     return [to_session_out(row) for row in rows]
 
@@ -83,10 +84,12 @@ async def run_round(session_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/sessions/{session_id}/action", response_model=SessionOut)
-def human_action(session_id: str, request: HumanAction, db: Session = Depends(get_db)):
+async def human_action(session_id: str, request: HumanAction, db: Session = Depends(get_db)):
     try:
-        return to_session_out(orchestrator.apply_human_action(db, session_id, request))
+        return to_session_out(await orchestrator.apply_human_action(db, session_id, request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
