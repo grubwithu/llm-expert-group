@@ -95,6 +95,35 @@ The backend uses raw HTTP rather than vendor SDKs so custom gateways work natura
 
 The Chairman, Secretary, and every Expert may use a completely different provider, endpoint, API key, and protocol.
 
+### Reasoning depth
+
+Reasoning is a first-class per-model setting instead of a vendor-specific `params` guess:
+
+```yaml
+# OpenAI Responses (and OpenAI-compatible Chat Completions)
+reasoning:
+  effort: high
+
+# Newer Claude models with adaptive thinking
+reasoning:
+  mode: adaptive
+  effort: high
+
+# Legacy Claude models with manual extended thinking
+reasoning:
+  mode: budget
+  budget_tokens: 6000
+```
+
+The compatibility layer translates the normalized setting for each protocol:
+
+- `openai_responses` -> `reasoning: {effort: ...}`;
+- `openai_chat_completions` -> top-level `reasoning_effort`;
+- `anthropic_messages` adaptive mode -> `thinking: {type: adaptive}` plus `output_config.effort`;
+- `anthropic_messages` budget mode -> `thinking: {type: enabled, budget_tokens: ...}`.
+
+`mode: disabled` explicitly asks the provider to disable reasoning where that model supports it. Omitting `reasoning` preserves the provider/model default. `params` is still applied last, so a custom gateway can override any normalized mapping with its exact raw payload fields. Unsupported combinations fail before the HTTP request rather than being silently ignored.
+
 ## Quick start
 
 ### 1. Configure models

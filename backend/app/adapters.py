@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import ModelConfig
+from .config import ModelConfig, ReasoningConfig
 
 
 class ModelAdapter(ABC):
@@ -33,6 +33,51 @@ class ModelAdapter(ABC):
                 await client.aclose()
 
 
+
+def _openai_reasoning_payload(reasoning: ReasoningConfig | None) -> dict[str, Any]:
+    if reasoning is None:
+        return {}
+    if reasoning.mode in {"adaptive", "budget"} or reasoning.budget_tokens is not None:
+        raise ValueError("OpenAI protocols do not support reasoning.mode=adaptive/budget or budget_tokens")
+    effort = "none" if reasoning.mode == "disabled" else reasoning.effort
+    return {"reasoning": {"effort": effort}} if effort else {}
+
+
+def _openai_chat_reasoning_payload(reasoning: ReasoningConfig | None) -> dict[str, Any]:
+    if reasoning is None:
+        return {}
+    if reasoning.mode in {"adaptive", "budget"} or reasoning.budget_tokens is not None:
+        raise ValueError("OpenAI Chat Completions does not support reasoning.mode=adaptive/budget or budget_tokens")
+    effort = "none" if reasoning.mode == "disabled" else reasoning.effort
+    return {"reasoning_effort": effort} if effort else {}
+
+
+def _anthropic_reasoning_payload(reasoning: ReasoningConfig | None) -> dict[str, Any]:
+    if reasoning is None:
+        return {}
+
+    mode = reasoning.mode
+    if mode == "auto":
+        if reasoning.budget_tokens is not None:
+            mode = "budget"
+        elif reasoning.effort is not None:
+            mode = "adaptive"
+        else:
+            return {}
+
+    if mode == "budget":
+        if reasoning.budget_tokens is None:
+            raise ValueError("Anthropic reasoning.mode=budget requires budget_tokens")
+        return {"thinking": {"type": "enabled", "budget_tokens": reasoning.budget_tokens}}
+    if mode == "adaptive":
+        payload: dict[str, Any] = {"thinking": {"type": "adaptive"}}
+        if reasoning.effort:
+            payload["output_config"] = {"effort": reasoning.effort}
+        return payload
+    if mode == "disabled":
+        return {"thinking": {"type": "disabled"}}
+    raise ValueError(f"unsupported Anthropic reasoning mode: {mode}")
+
 def _endpoint(base: str, suffix: str) -> str:
     value = base.rstrip("/")
     path = urlparse(value).path.rstrip("/")
@@ -50,6 +95,7 @@ class OpenAIResponsesAdapter(ModelAdapter):
             "instructions": system,
             "input": prompt,
         }
+        payload.update(_openai_reasoning_payload(self.config.reasoning))
         payload.update(self.config.params)
         headers = {
             "Authorization": f"Bearer {self.config.resolved_api_key()}",
@@ -68,7 +114,16 @@ class AnthropicMessagesAdapter(ModelAdapter):
             "system": system,
             "messages": [{"role": "user", "content": prompt}],
         }
+        payload.update(_anthropic_reasoning_payload(self.config.reasoning))
         payload.update(self.config.params)
+        thinking = payload.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") in {"enabled", "adaptive"}:
+            if "temperature" in payload and payload["temperature"] != 1:
+                raise ValueError("Anthropic thinking requires temperature=1 or an omitted temperature")
+            budget = thinking.get("budget_tokens")
+            max_tokens = payload.get("max_tokens")
+            if isinstance(budget, int) and isinstance(max_tokens, int) and budget >= max_tokens:
+                raise ValueError("Anthropic budget_tokens must be less than max_tokens")
         headers = {
             "x-api-key": self.config.resolved_api_key(),
             "anthropic-version": "2023-06-01",
@@ -88,6 +143,7 @@ class OpenAIChatCompletionsAdapter(ModelAdapter):
                 {"role": "user", "content": prompt},
             ],
         }
+        payload.update(_openai_chat_reasoning_payload(self.config.reasoning))
         payload.update(self.config.params)
         headers = {
             "Authorization": f"Bearer {self.config.resolved_api_key()}",

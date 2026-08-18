@@ -8,6 +8,30 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 Protocol = Literal["openai_responses", "anthropic_messages", "openai_chat_completions"]
+ReasoningMode = Literal["auto", "adaptive", "budget", "disabled"]
+
+
+class ReasoningConfig(BaseModel):
+    """Provider-neutral reasoning controls translated by each wire-protocol adapter.
+
+    ``params`` remains the raw escape hatch and is applied after this translation.
+    """
+
+    mode: ReasoningMode = "auto"
+    effort: str | None = None
+    budget_tokens: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_reasoning(self) -> "ReasoningConfig":
+        if self.mode == "budget" and self.budget_tokens is None:
+            raise ValueError("reasoning.mode=budget requires budget_tokens")
+        if self.mode == "adaptive" and self.budget_tokens is not None:
+            raise ValueError("reasoning.mode=adaptive cannot set budget_tokens")
+        if self.mode == "disabled" and self.budget_tokens is not None:
+            raise ValueError("reasoning.mode=disabled cannot set budget_tokens")
+        if self.budget_tokens is not None and self.effort is not None:
+            raise ValueError("reasoning cannot set both effort and budget_tokens")
+        return self
 
 
 class ModelConfig(BaseModel):
@@ -20,6 +44,7 @@ class ModelConfig(BaseModel):
     api_key_env: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     params: dict[str, Any] = Field(default_factory=dict)
+    reasoning: ReasoningConfig | None = None
     timeout_seconds: float = 120.0
 
     @model_validator(mode="after")

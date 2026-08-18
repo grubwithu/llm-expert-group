@@ -26,6 +26,8 @@ models:
     model: gpt-5.6
     api_url: https://api.openai.com/v1
     api_key_env: CHAIRMAN_API_KEY
+    reasoning:
+      effort: high
     params:
       store: false
 
@@ -36,6 +38,9 @@ models:
     model: gpt-5.6
     api_url: https://api.openai.com/v1
     api_key_env: SECRETARY_API_KEY
+    # Secretary usually needs less creative/deep reasoning than the chairman.
+    reasoning:
+      effort: low
     params:
       store: false
 
@@ -45,6 +50,8 @@ models:
     model: gpt-5.6
     api_url: https://api.openai.com/v1
     api_key_env: GPT_EXPERT_API_KEY
+    reasoning:
+      effort: xhigh
     params:
       store: false
 
@@ -54,6 +61,11 @@ models:
     model: claude-opus-4-1-20250805
     api_url: https://api.anthropic.com/v1
     api_key_env: CLAUDE_EXPERT_API_KEY
+    # Legacy Claude 4.x manual thinking uses a token budget. Newer Claude models
+    # can instead use mode: adaptive + effort: high.
+    reasoning:
+      mode: budget
+      budget_tokens: 6000
     params:
       max_tokens: 8192
 
@@ -64,5 +76,8 @@ models:
     model: your-model-name
     api_url: https://your-gateway.example.com/v1
     api_key_env: THIRD_PARTY_API_KEY
+    # OpenAI-compatible Chat Completions maps this to reasoning_effort.
+    reasoning:
+      effort: high
     params:
       temperature: 0.3
